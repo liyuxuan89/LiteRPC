@@ -8,11 +8,15 @@ import (
 	"net"
 )
 
-type Foo struct {
+type Foo struct{}
+
+type Arg struct {
+	Num1 int
+	Num2 int
 }
 
-func (f *Foo) Double(arg int, reply *int) error {
-	*reply = arg*2
+func (f *Foo) Double(arg Arg, reply *int) error {
+	*reply = arg.Num1 + arg.Num2
 	return nil
 }
 
@@ -31,26 +35,22 @@ func startServer(addr chan<- string) {
 func main() {
 	addr := make(chan string)
 	go startServer(addr)
-	conn, err := net.Dial("tcp", <-addr)
+	cli := LiteRPC.NewClient()
+	err := cli.Dial(<-addr, codec.GobCodec)
+	// conn, err := net.Dial("tcp", <-addr)
 	if err != nil {
 		log.Println("Dial error", err)
 	}
-	defer conn.Close()
-
-	opt := codec.GetOption(codec.GobCodec)
-	_, err = conn.Write(opt) // write loop
-	newCodecFunc, _ := codec.ParseOption(opt)
-	co := newCodecFunc(conn)
-
-	h := &codec.Header{
-		Seq: 100,
-		ServiceMethod: "Foo.Double",
+	defer cli.Close()
+	var ret int
+	arg := &Arg{
+		Num1: 10,
+		Num2: 20,
 	}
-	b := 10
-	_ = co.Write(h, &b)
-
-	co.ReadHeader(h)
-	fmt.Println(h)
-	co.ReadBody(&b)
-	fmt.Println(b)
+	for i := 0; i < 5; i++ {
+		arg.Num1 = i
+		arg.Num2 = i * 2
+		_ = cli.Call("Foo.Double", arg, &ret)
+		fmt.Println(ret)
+	}
 }

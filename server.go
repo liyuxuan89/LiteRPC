@@ -20,7 +20,7 @@ func NewServer() *Server {
 
 func (s *Server) Register(recv interface{}) error {
 	serve := NewService(recv)
-	_, dup := s.serviceMap.LoadOrStore(serve.name,serve)
+	_, dup := s.serviceMap.LoadOrStore(serve.name, serve)
 	if dup {
 		log.Println("rpc server: service already loaded: " + serve.name)
 		return errors.New("rpc server: service already loaded: " + serve.name)
@@ -28,7 +28,7 @@ func (s *Server) Register(recv interface{}) error {
 	return nil
 }
 
-func (s *Server) Accept(lis net.Listener)  {
+func (s *Server) Accept(lis net.Listener) {
 	for {
 		conn, err := lis.Accept()
 		if err != nil {
@@ -39,7 +39,7 @@ func (s *Server) Accept(lis net.Listener)  {
 	}
 }
 
-func (s *Server) ServeConn(conn io.ReadWriteCloser)  {
+func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 	// ****************************** read option ******************************
 	opt := make([]byte, 5)
 	for readBytes := 0; readBytes < 5; {
@@ -61,7 +61,7 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser)  {
 	s.ServeCodec(newCodecFunc(conn))
 }
 
-func (s *Server) ServeCodec(c codec.Codec)  {
+func (s *Server) ServeCodec(c codec.Codec) {
 	header := new(codec.Header)
 	var err error
 	for {
