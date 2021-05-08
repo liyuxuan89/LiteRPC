@@ -2,6 +2,7 @@ package LiteRPC
 
 import (
 	"LiteRPC/codec"
+	"context"
 	"errors"
 	"log"
 	"net"
@@ -63,28 +64,34 @@ func (c *client) Dial(addr string, typ codec.Type) error {
 	return nil
 }
 
-func (c *client) Call(serviceMethod string, argv, replyv interface{}) error {
-	c.mu.Lock()
-	c.header.Seq += 1
-	c.header.ServiceMethod = serviceMethod
-	c.header.Error = ""
-	err := c.cc.Write(c.header, argv)
-	if err != nil {
-		log.Println("rpc client: write request error:", err)
-		return err
-	}
+func (c *client) Call(ctx context.Context, serviceMethod string, argv, replyv interface{}) (err error) {
 	done := make(chan struct{})
-	ca := &call{
-		seq:    c.header.Seq,
-		replyv: replyv,
-		done:   done,
-	}
-	c.pending[c.header.Seq] = ca
-	c.mu.Unlock()
-	<-done
-	if ca.err != nil {
-		log.Println("rpc client: getting replyv error:", err)
-		return err
+	ca := new(call)
+	go func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.header.Seq += 1
+		c.header.ServiceMethod = serviceMethod
+		c.header.Error = ""
+		err = c.cc.Write(c.header, argv)
+		if err != nil {
+			log.Println("rpc client: write request error:", err)
+			return
+		}
+		ca.seq = c.header.Seq
+		ca.replyv = replyv
+		ca.done = done
+		c.pending[c.header.Seq] = ca
+	}()
+	select {
+	case <-ctx.Done():
+		c.removeCall(ca.seq)
+		return errors.New("rpc client: calling timeout")
+	case <-done:
+		if ca.err != nil {
+			log.Println("rpc client: getting replyv error:", err)
+			return err
+		}
 	}
 	return nil
 }

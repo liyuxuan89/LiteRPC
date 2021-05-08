@@ -8,14 +8,18 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Server struct {
-	serviceMap sync.Map
+	handleTimeout time.Duration
+	serviceMap    sync.Map
 }
 
-func NewServer() *Server {
-	return &Server{}
+func NewServer(handleTimeout time.Duration) *Server {
+	return &Server{
+		handleTimeout: handleTimeout,
+	}
 }
 
 func (s *Server) Register(recv interface{}) error {
@@ -65,52 +69,69 @@ func (s *Server) ServeCodec(c codec.Codec) {
 	header := new(codec.Header)
 	var err error
 	for {
-		// ****************************** read header ******************************
-		err = c.ReadHeader(header)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			// ****************************** read header ******************************
+			err = c.ReadHeader(header)
+			if err != nil {
+				log.Println("rpc server: parsing header error")
+				return
+			}
+			// ****************************** get service method ******************************
+			serviceMethod := header.ServiceMethod
+			serviceMethodStrings := strings.Split(serviceMethod, ".")
+			if len(serviceMethodStrings) != 2 {
+				log.Println("rpc server: ill formed service method")
+				err = errors.New("rpc server: ill formed service method")
+				return
+			}
+			servei, ok := s.serviceMap.Load(serviceMethodStrings[0])
+			if !ok {
+				log.Println("rpc server: request service unavailable")
+				err = errors.New("rpc server: ill formed service method")
+				return
+			}
+			serve := servei.(*service)
+			methodTyp := serve.getMethod(serviceMethodStrings[1])
+			if methodTyp == nil {
+				log.Println("rpc server: request method unavailable")
+				err = errors.New("rpc server: request method unavailable")
+				return
+			}
+			// ****************************** get argv and replyv ******************************
+			argv := methodTyp.newArgv()
+			replyv := methodTyp.newReplyv()
+			body := argv.Addr().Interface()
+			err = c.ReadBody(body)
+			if err != nil {
+				log.Println("rpc server: parsing body error")
+				return
+			}
+			err = serve.call(methodTyp, argv, replyv)
+			var replyvi interface{}
+			if err != nil {
+				log.Println("rpc server: calling error " + err.Error())
+				header.Error = err.Error()
+				replyvi = nil
+			} else {
+				replyvi = replyv.Interface()
+			}
+			// ****************************** send response ******************************
+			err = c.Write(header, replyvi)
+			if err != nil {
+				log.Println("rpc server: write response error")
+				return
+			}
+		}()
+		select {
+		case <-time.After(s.handleTimeout):
+			log.Println("rpc server: handle timeout")
+			err = errors.New("rpc server: handle timeout")
+			continue
+		case <-done:
+		}
 		if err != nil {
-			log.Println("rpc server: parsing header error")
-			break
-		}
-		// ****************************** get service method ******************************
-		serviceMethod := header.ServiceMethod
-		serviceMethodStrings := strings.Split(serviceMethod, ".")
-		if len(serviceMethodStrings) != 2 {
-			log.Println("rpc server: ill formed service method")
-			break
-		}
-		servei, ok := s.serviceMap.Load(serviceMethodStrings[0])
-		if !ok {
-			log.Println("rpc server: request service unavailable")
-			break
-		}
-		serve := servei.(*service)
-		methodTyp := serve.getMethod(serviceMethodStrings[1])
-		if methodTyp == nil {
-			log.Println("rpc server: request method unavailable")
-			break
-		}
-		// ****************************** get argv and replyv ******************************
-		argv := methodTyp.newArgv()
-		replyv := methodTyp.newReplyv()
-		body := argv.Addr().Interface()
-		err = c.ReadBody(body)
-		if err != nil {
-			log.Println("rpc server: parsing body error")
-			break
-		}
-		err = serve.call(methodTyp, argv, replyv)
-		var replyvi interface{}
-		if err != nil {
-			log.Println("rpc server: calling error " + err.Error())
-			header.Error = err.Error()
-			replyvi = nil
-		} else {
-			replyvi = replyv.Interface()
-		}
-		// ****************************** send response ******************************
-		err = c.Write(header, replyvi)
-		if err != nil {
-			log.Println("rpc server: write response error")
 			break
 		}
 	}
