@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -70,35 +71,35 @@ func (s *Server) ServeCodec(c codec.Codec) {
 	var err error
 	for {
 		done := make(chan struct{})
+		// ****************************** read header ******************************
+		err = c.ReadHeader(header)
+		if err != nil {
+			log.Println("rpc server: parsing header error")
+			return
+		}
+		// ****************************** get service method ******************************
+		serviceMethod := header.ServiceMethod
+		serviceMethodStrings := strings.Split(serviceMethod, ".")
+		if len(serviceMethodStrings) != 2 {
+			log.Println("rpc server: ill formed service method")
+			err = errors.New("rpc server: ill formed service method")
+			return
+		}
+		servei, ok := s.serviceMap.Load(serviceMethodStrings[0])
+		if !ok {
+			log.Println("rpc server: request service unavailable")
+			err = errors.New("rpc server: ill formed service method")
+			return
+		}
+		serve := servei.(*service)
+		methodTyp := serve.getMethod(serviceMethodStrings[1])
+		if methodTyp == nil {
+			log.Println("rpc server: request method unavailable")
+			err = errors.New("rpc server: request method unavailable")
+			return
+		}
 		go func() {
 			defer close(done)
-			// ****************************** read header ******************************
-			err = c.ReadHeader(header)
-			if err != nil {
-				log.Println("rpc server: parsing header error")
-				return
-			}
-			// ****************************** get service method ******************************
-			serviceMethod := header.ServiceMethod
-			serviceMethodStrings := strings.Split(serviceMethod, ".")
-			if len(serviceMethodStrings) != 2 {
-				log.Println("rpc server: ill formed service method")
-				err = errors.New("rpc server: ill formed service method")
-				return
-			}
-			servei, ok := s.serviceMap.Load(serviceMethodStrings[0])
-			if !ok {
-				log.Println("rpc server: request service unavailable")
-				err = errors.New("rpc server: ill formed service method")
-				return
-			}
-			serve := servei.(*service)
-			methodTyp := serve.getMethod(serviceMethodStrings[1])
-			if methodTyp == nil {
-				log.Println("rpc server: request method unavailable")
-				err = errors.New("rpc server: request method unavailable")
-				return
-			}
 			// ****************************** get argv and replyv ******************************
 			argv := methodTyp.newArgv()
 			replyv := methodTyp.newReplyv()
@@ -135,4 +136,17 @@ func (s *Server) ServeCodec(c codec.Codec) {
 			break
 		}
 	}
+}
+
+func (s *Server) PostRegistry(addrRegistry string, lis net.Listener) error {
+	httpClient := &http.Client{}
+	req, err := http.NewRequest(http.MethodPost, addrRegistry, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("rpc-server-addr", lis.Addr().String())
+	if _, err := httpClient.Do(req); err != nil {
+		return err
+	}
+	return nil
 }

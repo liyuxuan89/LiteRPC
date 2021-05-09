@@ -2,11 +2,11 @@ package main
 
 import (
 	"LiteRPC"
-	"LiteRPC/codec"
 	"context"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"time"
 )
 
@@ -24,7 +24,7 @@ func (f *Foo) Double(arg Arg, reply *int) error {
 	return nil
 }
 
-func startServer(addr chan<- string) {
+func startServer(addr chan<- string, addrReg string) {
 	l, err := net.Listen("tcp", ":0")
 	if err != nil {
 		log.Println("network error", err)
@@ -32,27 +32,50 @@ func startServer(addr chan<- string) {
 	log.Println("server runs on", l.Addr().String())
 	server := LiteRPC.NewServer(time.Second)
 	_ = server.Register(&Foo{})
-	addr <- l.Addr().String()
+	//addr <- l.Addr().String()
+	_ = server.PostRegistry(addrReg, l)
 	server.Accept(l)
+
+}
+
+func startRegistry(addr chan<- string) {
+	l, err := net.Listen("tcp", ":9999")
+	if err != nil {
+		log.Println("network error", err)
+	}
+	log.Println("registry runs on", l.Addr().String())
+	addr <- l.Addr().String()
+	_ = LiteRPC.NewRegistry()
+	log.Fatal(http.Serve(l, nil))
 }
 
 func main() {
+	var err error
+	addr0 := make(chan string)
 	addr1 := make(chan string)
 	addr2 := make(chan string)
-	go startServer(addr1)
-	go startServer(addr2)
-	servers := make([]*LiteRPC.ServerInfo, 2)
-	servers[0] = &LiteRPC.ServerInfo{
-		Addr: <-addr1,
-		Co:   codec.GobCodec,
-	}
-	servers[1] = &LiteRPC.ServerInfo{
-		Addr: <-addr2,
-		Co:   codec.GobCodec,
-	}
-	cli := LiteRPC.NewXClient(LiteRPC.RoundRobinSelect)
-	n, err := cli.DialServers(servers)
-	fmt.Println("servers num", n)
+
+	go startRegistry(addr0)
+	<-addr0
+	addrReg := "http://localhost:9999/LiteRPC"
+	go startServer(addr1, addrReg)
+	go startServer(addr2, addrReg)
+	time.Sleep(time.Second * 2)
+
+	//servers := make([]*LiteRPC.ServerInfo, 2)
+	//servers[0] = &LiteRPC.ServerInfo{
+	//	Addr: <-addr1,
+	//	Co:   codec.GobCodec,
+	//}
+	//servers[1] = &LiteRPC.ServerInfo{
+	//	Addr: <-addr2,
+	//	Co:   codec.GobCodec,
+	//}
+	cli := LiteRPC.NewXClient(LiteRPC.RoundRobinSelect, addrReg)
+	time.Sleep(time.Second * 2)
+
+	// n, err := cli.DialServers(servers)
+	// fmt.Println("servers num", n)
 	//cli := LiteRPC.NewClient()
 	//err := cli.Dial(<-addr, codec.GobCodec)
 	//if err != nil {

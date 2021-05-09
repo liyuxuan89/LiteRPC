@@ -3,9 +3,12 @@ package LiteRPC
 import (
 	"LiteRPC/codec"
 	"context"
+	"errors"
 	"log"
 	"math"
 	"math/rand"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -13,17 +16,15 @@ import (
 type SelectMode int
 
 type xClient struct {
-	mode    SelectMode
-	mu      sync.Mutex
-	index   int // index for round robin
-	r       *rand.Rand
-	addrs   []string // available servers ( get from registry)
-	clients map[string]*client
-}
-
-type ServerInfo struct {
-	Addr string
-	Co   codec.Type
+	addrRegistry string
+	timeout      time.Duration
+	mode         SelectMode
+	mu           sync.Mutex
+	isClose      bool
+	index        int // index for round robin
+	r            *rand.Rand
+	addrs        []string // available servers ( get from registry)
+	clients      map[string]*client
 }
 
 const (
@@ -31,13 +32,17 @@ const (
 	RoundRobinSelect
 )
 
-func NewXClient(s SelectMode) *xClient {
+func NewXClient(s SelectMode, regAddr string) *xClient {
 	c := &xClient{
-		r:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		mode:    s,
-		clients: make(map[string]*client),
+		addrRegistry: regAddr,
+		timeout:      60 * time.Second,
+		r:            rand.New(rand.NewSource(time.Now().UnixNano())),
+		mode:         s,
+		isClose:      false,
+		clients:      make(map[string]*client),
 	}
 	c.index = c.r.Intn(math.MaxInt32 - 1)
+	go c.getServers()
 	return c
 }
 
@@ -48,10 +53,13 @@ func (xc *xClient) Close() error {
 		_ = cli.Close()
 		delete(xc.clients, k)
 	}
+	xc.isClose = true
 	return nil
 }
 
 func (xc *xClient) Dial(addr string, typ codec.Type) (err error) {
+	xc.mu.Lock()
+	defer xc.mu.Unlock()
 	cli, ok := xc.clients[addr]
 	if ok && cli.available {
 		return nil
@@ -71,19 +79,42 @@ func (xc *xClient) Dial(addr string, typ codec.Type) (err error) {
 	return nil
 }
 
-func (xc *xClient) DialServers(servers []*ServerInfo) (n int, err error) {
+func (xc *xClient) DialServers(servers []string, co codec.Type) (n int, err error) {
 	for _, s := range servers {
-		err = xc.Dial(s.Addr, s.Co)
+		err = xc.Dial(s, co)
 		if err == nil {
 			n += 1
-			xc.addrs = append(xc.addrs, s.Addr)
+			xc.addrs = append(xc.addrs, s)
 		}
 	}
 	return
 }
 
+func (xc *xClient) getServers() {
+	for {
+		resp, err := http.Get(xc.addrRegistry)
+		if err == nil {
+			serversString := resp.Header.Get("rpc-servers")
+			servers := strings.Split(serversString, ",")
+
+			_, _ = xc.DialServers(servers, codec.GobCodec)
+		}
+		if xc.isClose {
+			break
+		}
+		select {
+		case <-time.After(xc.timeout):
+			continue
+		}
+	}
+
+}
+
 func (xc *xClient) Call(ctx context.Context, serviceMethod string, argv, replyv interface{}) error {
 	var idx int
+	if len(xc.addrs) == 0 {
+		return errors.New("rpc xclient error: not server available")
+	}
 	switch xc.mode {
 	case RandomSelect:
 		idx = xc.r.Intn(math.MaxInt32-1) % len(xc.addrs)
