@@ -37,16 +37,30 @@ func startServer(addr chan<- string) {
 }
 
 func main() {
-	addr := make(chan string)
-	go startServer(addr)
-	cli := LiteRPC.NewClient()
-	err := cli.Dial(<-addr, codec.GobCodec)
-	if err != nil {
-		log.Println("Dial error", err)
+	addr1 := make(chan string)
+	addr2 := make(chan string)
+	go startServer(addr1)
+	go startServer(addr2)
+	servers := make([]*LiteRPC.ServerInfo, 2)
+	servers[0] = &LiteRPC.ServerInfo{
+		Addr: <-addr1,
+		Co:   codec.GobCodec,
 	}
-	defer func() {
-		_ = cli.Close()
-	}()
+	servers[1] = &LiteRPC.ServerInfo{
+		Addr: <-addr2,
+		Co:   codec.GobCodec,
+	}
+	cli := LiteRPC.NewXClient(LiteRPC.RoundRobinSelect)
+	n, err := cli.DialServers(servers)
+	fmt.Println("servers num", n)
+	//cli := LiteRPC.NewClient()
+	//err := cli.Dial(<-addr, codec.GobCodec)
+	//if err != nil {
+	//	log.Println("Dial error", err)
+	//}
+	//defer func() {
+	//	_ = cli.Close()
+	//}()
 	var ret int
 	arg := &Arg{
 		Num1: 10,
