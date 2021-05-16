@@ -35,7 +35,6 @@ func startServer(addr chan<- string, addrReg string) {
 	//addr <- l.Addr().String()
 	_ = server.PostRegistry(addrReg, l)
 	server.Accept(l)
-
 }
 
 func startRegistry(addr chan<- string) {
@@ -71,7 +70,7 @@ func main() {
 	//	Addr: <-addr2,
 	//	Co:   codec.GobCodec,
 	//}
-	cli := LiteRPC.NewXClient(LiteRPC.RoundRobinSelect, addrReg)
+	cli := LiteRPC.NewXClient(LiteRPC.ConsistentHash, addrReg)
 	time.Sleep(time.Second * 2)
 
 	// n, err := cli.DialServers(servers)

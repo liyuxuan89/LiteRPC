@@ -2,8 +2,10 @@ package LiteRPC
 
 import (
 	"LiteRPC/codec"
+	"LiteRPC/consistenthash"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"math/rand"
@@ -23,13 +25,15 @@ type xClient struct {
 	isClose      bool
 	index        int // index for round robin
 	r            *rand.Rand
-	addrs        []string // available servers ( get from registry)
+	addrs        []string // available servers (get from registry)
 	clients      map[string]*client
+	ch           *consistenthash.ConsistentHash
 }
 
 const (
 	RandomSelect SelectMode = iota
 	RoundRobinSelect
+	ConsistentHash
 )
 
 func NewXClient(s SelectMode, regAddr string) *xClient {
@@ -42,6 +46,7 @@ func NewXClient(s SelectMode, regAddr string) *xClient {
 		clients:      make(map[string]*client),
 	}
 	c.index = c.r.Intn(math.MaxInt32 - 1)
+	c.ch = consistenthash.NewConsistentHash(10)
 	go c.getServers()
 	return c
 }
@@ -85,6 +90,7 @@ func (xc *xClient) DialServers(servers []string, co codec.Type) (n int, err erro
 		if err == nil {
 			n += 1
 			xc.addrs = append(xc.addrs, s)
+			xc.ch.Add(s)
 		}
 	}
 	return
@@ -112,17 +118,22 @@ func (xc *xClient) getServers() {
 
 func (xc *xClient) Call(ctx context.Context, serviceMethod string, argv, replyv interface{}) error {
 	var idx int
+
 	if len(xc.addrs) == 0 {
 		return errors.New("rpc xclient error: not server available")
 	}
+	var addr string
 	switch xc.mode {
 	case RandomSelect:
 		idx = xc.r.Intn(math.MaxInt32-1) % len(xc.addrs)
+		addr = xc.addrs[idx]
 	case RoundRobinSelect:
 		idx = xc.index % len(xc.addrs)
 		xc.index += 1
+		addr = xc.addrs[idx]
+	case ConsistentHash:
+		addr = xc.ch.Get(fmt.Sprintf("%v+%s", argv, serviceMethod))
 	}
-	addr := xc.addrs[idx]
 	cli := xc.clients[addr]
 	return cli.Call(ctx, serviceMethod, argv, replyv)
 }
